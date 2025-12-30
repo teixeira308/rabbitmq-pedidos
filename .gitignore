@@ -1,0 +1,14 @@
+# Binários
+/bin/
+/dist/
+
+# Go
+*.exe
+*.out
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
