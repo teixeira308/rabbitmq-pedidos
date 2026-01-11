@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -16,7 +17,12 @@ type Pedido struct {
 var ch *amqp.Channel
 
 func main() {
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	amqpURL := os.Getenv("RABBITMQ_URL")
+	if amqpURL == "" {
+		log.Fatal("RABBITMQ_URL não definida")
+	}
+
+	conn, err := amqp.Dial(amqpURL)
 	if err != nil {
 		log.Fatal("Erro ao conectar no RabbitMQ:", err)
 	}
@@ -26,12 +32,9 @@ func main() {
 		log.Fatal("Erro ao abrir canal:", err)
 	}
 
-	exchange := "pedidos.exchange"
-	queue := "pedidos.criados"
-	route := "pedidos.criados"
-
+	// ✅ Exchange pode existir ou não — não dá erro
 	err = ch.ExchangeDeclare(
-		exchange,
+		"pedidos.exchange",
 		"direct",
 		true,
 		false,
@@ -43,15 +46,10 @@ func main() {
 		log.Fatal("Erro ao declarar exchange:", err)
 	}
 
-	err = ch.QueueBind(queue, route, exchange, false, nil)
-	if err != nil {
-		log.Fatal("Erro ao dar bind:", err)
-	}
-
 	http.HandleFunc("/pedido", HandlePedido)
 
-	log.Println("Produtor rodando na porta 3000...")
-	http.ListenAndServe(":3000", nil)
+	log.Println("🚀 Producer rodando na porta 3000")
+	log.Fatal(http.ListenAndServe(":3000", nil))
 }
 
 func HandlePedido(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +64,7 @@ func HandlePedido(w http.ResponseWriter, r *http.Request) {
 
 	err := ch.Publish(
 		"pedidos.exchange",
-		"pedidos.criados",
+		"pedidos.criados", // routing key
 		false,
 		false,
 		amqp.Publishing{
@@ -76,9 +74,10 @@ func HandlePedido(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		http.Error(w, "Erro ao publicar mensagem", 500)
+		http.Error(w, "Erro ao publicar mensagem", http.StatusInternalServerError)
 		return
 	}
 
+	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"ok"}`))
 }

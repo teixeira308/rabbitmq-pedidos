@@ -27,10 +27,12 @@ const (
 )
 
 func main() {
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
-	if err != nil {
-		log.Fatal(err)
+	amqpURL := os.Getenv("RABBITMQ_URL")
+	if amqpURL == "" {
+		log.Fatal("RABBITMQ_URL não definida")
 	}
+
+	conn := connectRabbit(amqpURL)
 	defer conn.Close()
 
 	ch, err := conn.Channel()
@@ -81,7 +83,7 @@ func main() {
 			}
 
 			wg.Add(1)
-			go processMessage(ch, msg, wg)
+			processMessage(ch, msg, wg)
 		}
 	}
 }
@@ -101,27 +103,24 @@ func processMessage(ch *amqp.Channel, msg amqp.Delivery, wg *sync.WaitGroup) {
 	if pedido.Valor > 1000 {
 		if retries >= maxRetries {
 			log.Println("❌ Estourou retries → DLQ", pedido)
-			msg.Nack(false, false)
+
+			ch.Publish(
+				exchange,
+				queueDLQ,
+				false,
+				false,
+				amqp.Publishing{
+					ContentType: "application/json",
+					Body:        msg.Body,
+				},
+			)
+
+			msg.Ack(false)
 			return
 		}
 
-		log.Println("🔁 Retry", retries+1)
-
-		if err := ch.Publish(
-			exchange,
-			queueRetry,
-			false,
-			false,
-			amqp.Publishing{
-				ContentType: "application/json",
-				Body:        msg.Body,
-			},
-		); err != nil {
-			msg.Nack(false, true)
-			return
-		}
-
-		msg.Ack(false)
+		log.Println("🔁 Retry automático", retries+1)
+		msg.Nack(false, false) // vai pra retry via DLX
 		return
 	}
 
@@ -161,20 +160,42 @@ func getRetryCount(msg amqp.Delivery) int {
 func declareTopology(ch *amqp.Channel) {
 	ch.ExchangeDeclare(exchange, "direct", true, false, false, false, nil)
 
+	// MAIN → manda para RETRY
 	ch.QueueDeclare(queueMain, true, false, false, false, amqp.Table{
 		"x-dead-letter-exchange":    exchange,
-		"x-dead-letter-routing-key": queueDLQ,
+		"x-dead-letter-routing-key": queueRetry,
 	})
 
+	// RETRY → volta para MAIN após TTL
 	ch.QueueDeclare(queueRetry, true, false, false, false, amqp.Table{
 		"x-message-ttl":             int32(5000),
 		"x-dead-letter-exchange":    exchange,
 		"x-dead-letter-routing-key": queueMain,
 	})
 
+	// DLQ final
 	ch.QueueDeclare(queueDLQ, true, false, false, false, nil)
 
 	ch.QueueBind(queueMain, queueMain, exchange, false, nil)
 	ch.QueueBind(queueRetry, queueRetry, exchange, false, nil)
 	ch.QueueBind(queueDLQ, queueDLQ, exchange, false, nil)
+}
+
+func connectRabbit(amqpURL string) *amqp.Connection {
+	var conn *amqp.Connection
+	var err error
+
+	for i := 0; i < 10; i++ {
+		conn, err = amqp.Dial(amqpURL)
+		if err == nil {
+			log.Println("✅ Conectado ao RabbitMQ")
+			return conn
+		}
+
+		log.Println("⏳ RabbitMQ indisponível, retry em 3s...")
+		time.Sleep(3 * time.Second)
+	}
+
+	log.Fatalf("❌ Falha ao conectar no RabbitMQ: %v", err)
+	return nil
 }
