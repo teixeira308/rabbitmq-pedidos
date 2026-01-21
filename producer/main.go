@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -20,7 +23,63 @@ var (
 	publishMutex sync.Mutex
 )
 
+/*
+====================
+METRICS
+====================
+*/
+
+var (
+	producerRunning = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "app_producer_running",
+		Help: "Indica se o producer está rodando",
+	})
+
+	httpRequests = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "app_http_requests_total",
+		Help: "Total de requisições HTTP recebidas",
+	})
+
+	publishSuccess = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "app_publish_success_total",
+		Help: "Total de mensagens publicadas com sucesso",
+	})
+
+	publishError = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "app_publish_error_total",
+		Help: "Total de erros ao publicar mensagens",
+	})
+
+	httpRequestDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "app_http_request_seconds",
+		Help:    "Duração das requisições HTTP",
+		Buckets: prometheus.DefBuckets,
+	})
+)
+
+func init() {
+	prometheus.MustRegister(
+		producerRunning,
+		httpRequests,
+		publishSuccess,
+		publishError,
+		httpRequestDuration,
+	)
+}
+
 func main() {
+	// ====================
+	// METRICS SERVER
+	// ====================
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Println("📊 Métricas expostas em :9092/metrics")
+		log.Fatal(http.ListenAndServe(":9092", nil))
+	}()
+
+	producerRunning.Set(1)
+	defer producerRunning.Set(0)
+
 	amqpURL := os.Getenv("RABBITMQ_URL")
 	if amqpURL == "" {
 		log.Fatal("RABBITMQ_URL não definida")
@@ -58,6 +117,12 @@ func main() {
 }
 
 func handlePedido(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	httpRequests.Inc()
+	defer func() {
+		httpRequestDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 		return
@@ -89,10 +154,12 @@ func handlePedido(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
+		publishError.Inc()
 		http.Error(w, "Erro ao publicar mensagem", http.StatusInternalServerError)
 		return
 	}
 
+	publishSuccess.Inc()
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"pedido enviado"}`))
 }

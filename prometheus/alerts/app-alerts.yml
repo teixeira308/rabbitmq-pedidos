@@ -1,0 +1,92 @@
+groups:
+- name: rabbitmq-app
+  rules:
+
+  # =========================
+  # CONSUMER
+  # =========================
+
+  - alert: ConsumerDown
+    expr: app_consumer_running == 0
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Consumer fora do ar"
+      description: "O consumer não está rodando ou parou inesperadamente."
+
+  - alert: ConsumerProcessingSlow
+    expr: rate(app_messages_processed_total[1m]) < 0.1
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Consumer processando lentamente"
+      description: "Baixa taxa de processamento de mensagens."
+
+  # =========================
+  # DLQ / RETRY
+  # =========================
+
+  - alert: MessagesGoingToDLQ
+    expr: rate(app_messages_dlq_total[1m]) > 0
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Mensagens indo para DLQ"
+      description: "Mensagens falharam após todos os retries."
+
+  - alert: RetryRateHigh
+    expr: rate(app_messages_retry_total[1m]) > 5
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Alta taxa de retry"
+      description: "Muitas mensagens estão entrando em retry."
+
+  # =========================
+  # PRODUCER
+  # =========================
+
+  - alert: ProducerDown
+    expr: up{job="producer"} == 0
+    for: 30s
+    labels:
+      severity: critical
+    annotations:
+      summary: "Producer fora do ar"
+      description: "A API producer não está respondendo."
+
+  - alert: ProducerPublishErrors
+    expr: rate(app_publish_errors_total[1m]) > 0
+    for: 30s
+    labels:
+      severity: warning
+    annotations:
+      summary: "Erro ao publicar mensagens"
+      description: "O producer está falhando ao publicar no RabbitMQ."
+
+  # =========================
+  # RABBITMQ (SINTOMAS)
+  # =========================
+
+  - alert: QueueGrowing
+    expr: rabbitmq_queue_messages_ready > 100
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Fila crescendo"
+      description: "Mensagens acumulando sem consumo."
+
+  - alert: UnackedMessagesHigh
+    expr: rabbitmq_queue_messages_unacked > 10
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Mensagens não confirmadas"
+      description: "Mensagens presas em processamento."
+
