@@ -7,5 +7,14 @@ scrape_configs:
       - targets:
           - rabbitmq:15692
 
+  - job_name: "producer"
+    static_configs:
+      - targets:
+          - producer:3000
+
+  - job_name: "consumer"
+    static_configs:
+      - targets:
+          - consumer:9091
 rule_files:
   - "alerts/*.yml"
